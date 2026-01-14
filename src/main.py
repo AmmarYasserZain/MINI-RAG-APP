@@ -3,20 +3,39 @@ from routes import base, data
 from contextlib import asynccontextmanager
 from helpers.config import Settings, get_settings
 from motor.motor_asyncio import AsyncIOMotorClient
-
+from stores.llm.LLMProviderFactory import LLMProviderFactory
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # -------- STARTUP --------
     settings: Settings = get_settings()
-    
-    # Startup Logic
+
     app.mongo_conn = AsyncIOMotorClient(settings.MONGODB_URL)
     app.db_client = app.mongo_conn[settings.MONGODB_DATABASE]
 
-    yield  # The app runs while it stays here
-    
-    # Shutdown logic
+    llm_provider_factory = LLMProviderFactory(settings)
+
+    # generation client
+    app.generation_client = llm_provider_factory.create(
+        provider=settings.GENERATION_BACKEND
+    )
+    app.generation_client.set_generation_model(
+        model_id=settings.GENERATION_MODEL_ID
+    )
+
+    # embedding client
+    app.embedding_client = llm_provider_factory.create(
+        provider=settings.EMBEDDING_BACKEND
+    )
+    app.embedding_client.set_embedding_model(
+        model_id=settings.EMBEDDING_MODEL_ID,
+        embedding_size=settings.EMBEDDING_MODEL_SIZE,
+    )
+
+    yield  # 👈 application runs here
+
+    # -------- SHUTDOWN --------
     app.mongo_conn.close()
 
 
