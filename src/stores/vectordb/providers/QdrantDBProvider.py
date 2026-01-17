@@ -1,8 +1,9 @@
 import logging
 from typing import List
 from qdrant_client import models, QdrantClient
+from models.db_schemes import RetrievedDocument
 from ..VectorDBInterface import VectorDBInterface
-from ..VectorDBEnums import VectorDBEnum, DistanceMethodEnums
+from ..VectorDBEnums import VectorDBEnums, DistanceMethodEnums
 
 
 
@@ -10,7 +11,7 @@ from ..VectorDBEnums import VectorDBEnum, DistanceMethodEnums
 
 class QdrantDBProvider:
 
-    def __ini__(self, db_path: str, distance_method: str):
+    def __init__(self, db_path: str, distance_method: str):
 
         self.client = None
         self.db_path = db_path
@@ -64,9 +65,10 @@ class QdrantDBProvider:
 
 
     def insert_one(self, collection_name: str, text: str, vector: list,
-                   metadata: dict = None,
-                   record_id: str = None):
-        if not self.is_collection_existed(collection_name=collection_name):
+                         metadata: dict = None, 
+                         record_id: str = None):
+        
+        if not self.is_collection_existed(collection_name):
             self.logger.error(f"Can not insert new record to non-existed collection: {collection_name}")
             return False
         
@@ -75,6 +77,7 @@ class QdrantDBProvider:
                 collection_name=collection_name,
                 records=[
                     models.Record(
+                        id=[record_id],
                         vector=vector,
                         payload={
                             "text": text, "metadata": metadata
@@ -87,16 +90,16 @@ class QdrantDBProvider:
             return False
 
         return True
-
-
+    
     def insert_many(self, collection_name: str, texts: list, 
                           vectors: list, metadata: list = None, 
                           record_ids: list = None, batch_size: int = 50):
+        
         if metadata is None:
             metadata = [None] * len(texts)
 
         if record_ids is None:
-            record_ids = [None] * len(texts)
+            record_ids = list(range(0, len(texts)))
 
         for i in range(0, len(texts), batch_size):
             batch_end = i + batch_size
@@ -104,9 +107,11 @@ class QdrantDBProvider:
             batch_texts = texts[i:batch_end]
             batch_vectors = vectors[i:batch_end]
             batch_metadata = metadata[i:batch_end]
+            batch_record_ids = record_ids[i:batch_end]
 
             batch_records = [
                 models.Record(
+                    id=batch_record_ids[x],
                     vector=batch_vectors[x],
                     payload={
                         "text": batch_texts[x], "metadata": batch_metadata[x]
@@ -126,13 +131,23 @@ class QdrantDBProvider:
                 return False
 
         return True
-        
 
 
-    def search_by_vector(self, collection_name: str, vector: list, limit: int=5):
-        return self.client.search(
+    def search_by_vector(self, collection_name: str, vector: list, limit: int=5) -> List[RetrievedDocument]:
+        results = self.client.search(
             collection_name=collection_name,
             query_vector=vector,
             limit=limit
         )
+
+        if not results or len(results) == 0:
+            return None
+        
+        return [
+            RetrievedDocument(**{
+                "text": result.payload["text"],
+                "score": result.score
+            })
+            for result in results
+        ]
     
