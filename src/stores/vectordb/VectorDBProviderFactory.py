@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 
 class VectorDBProviderFactory:
-    def __init__(self, config: Settings, db_client: sessionmaker):
+    def __init__(self, config: Settings, db_client: sessionmaker=None):
         self.config: Settings = config
         self.base_controller = BaseController()
         self.db_client: sessionmaker = db_client

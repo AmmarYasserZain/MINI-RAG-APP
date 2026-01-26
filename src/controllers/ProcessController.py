@@ -1,9 +1,20 @@
 import os
+from typing import List
+from dataclasses import dataclass
+
 from models import ProcessingEnum
 from .BaseController import BaseController
 from .ProjectController import ProjectController
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, PyMuPDFLoader
+
+
+
+@dataclass
+class Document:
+    page_content: str
+    metadata: dict
+
 
 class ProcessController(BaseController):
 
@@ -67,4 +78,39 @@ class ProcessController(BaseController):
             metadatas=file_content_metadata
         )
 
+        
         return chunks
+    
+
+    def process_simpler_splitter(self, texts: List[str], metadatas: List[dict], chunk_size: int, splitter_tag: str = "/n"):
+        full_text = " ".join(texts)
+
+        # splite by splitter tag
+        lines = [ doc.strip() for doc in full_text.split(splitter_tag) if len(doc.strip()) > 1 ]
+
+        chunks = []
+        cur_chunk = ""
+        for line in lines:
+            cur_chunk += line + splitter_tag
+            if len(cur_chunk) > chunk_size:
+                chunks.append(
+                    Document(
+                        page_content=cur_chunk.strip(),
+                        metadata={}
+                    )
+                )
+                cur_chunk = ""
+
+        if len(cur_chunk) >= 0:
+            chunks.append(
+                Document(
+                    page_content=cur_chunk.strip(),
+                    metadata={}
+                )
+            )
+
+        return  chunks
+
+
+
+
