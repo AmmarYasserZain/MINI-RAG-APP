@@ -20,7 +20,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        duration = time.time - start_time
+        duration = time.time() - start_time
         endpoint = request.url.path
 
         REQUEST_LATENCY.labels(method=request.method, endpoint=endpoint).observe(duration)
