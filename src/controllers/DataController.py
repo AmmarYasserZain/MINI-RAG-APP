@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 from fastapi import UploadFile
@@ -10,6 +11,18 @@ class DataController(BaseController):
     def __init__(self):
         super().__init__()
         self.size_scale = 1024 * 1024 # convert MB to bytes
+    
+    async def calculate_file_hash(self, file: UploadFile, chunk_size: int= 8192) -> str:
+        sha256_hash = hashlib.sha256()
+        await file.seek(0)
+
+        # Read file in chunks and update hash
+        while chunk := await file.read(chunk_size):
+            sha256_hash.update(chunk)
+
+        await file.seek(0)
+
+        return sha256_hash.hexdigest()
 
     def validate_uploaded_file(self, file: UploadFile):
 
