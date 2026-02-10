@@ -27,41 +27,60 @@ data_router = APIRouter(
 async def upload_data(request: Request, project_id: int, file: UploadFile,
                       app_settings: Settings=Depends(get_settings)):
     
-    
     project_model = await ProjectModel.create_instance(
         db_client = request.app.db_client
     )
-
     project = await project_model.get_project_or_create_one(project_id=project_id)
-
-    #validate thew file properties
+    
+    # Validate the file properties
     data_controller = DataController()
-
     is_valid, result_signal = data_controller.validate_uploaded_file(file=file)
-
     if not is_valid:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
-                "signal" : result_signal
+                "signal": result_signal
             }
-        ) 
+        )
     
+    # Calculate file hash BEFORE saving to check for duplicates
+    file_hash = await data_controller.calculate_file_hash(
+        file, 
+        app_settings.FILE_DEFAULT_CHUNK_SIZE
+    )
+    
+    # Check if file already exists in this project
+    asset_model = await AssetModel.create_instance(
+        db_client=request.app.db_client
+    )
+    existing_asset = await asset_model.get_asset_by_hash(
+        asset_project_id=project_id, 
+        file_hash=file_hash
+    )
+    
+    if existing_asset:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "signal": ResponseSignal.FILE_ALREADY_EXISTS.value,
+                "file_id": str(existing_asset.asset_id),
+                "message": "This file has already been uploaded to this project"
+            }
+        )
+    
+    # File is new, proceed with upload
     project_dir_path = ProjectController().get_project_path(project_id=project_id)
-
     file_path, file_id = data_controller.generate_unique_filepath(
         file.filename, 
         project_id=project_id
     )
-
+    
     try:
         async with aiofiles.open(file_path, "wb") as f:
             while chunk := await file.read(app_settings.FILE_DEFAULT_CHUNK_SIZE):
                 await f.write(chunk)
     except Exception as e:
-
         logger.error(f"Error while uploading file: {e}")
-
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
@@ -69,28 +88,22 @@ async def upload_data(request: Request, project_id: int, file: UploadFile,
             }
         )
     
-    
-    # Store the assets into the database
-    asset_model = await AssetModel.create_instance(
-        db_client=request.app.db_client
-    )
-
+    # Store the asset in the database with hash
     asset_resource = Asset(
         asset_project_id=project.project_id,
         asset_type=AssetTypeEnum.FILE.value,
         asset_name=file_id,
-        asset_size=os.path.getsize(file_path)
+        asset_size=os.path.getsize(file_path),
+        asset_hash=file_hash  
     )
     asset_record = await asset_model.create_asset(asset=asset_resource)
-
+    
     return JSONResponse(
         content={
-            "signal" : ResponseSignal.FILE_UPLOAD_SUCCESS.value,
+            "signal": ResponseSignal.FILE_UPLOAD_SUCCESS.value,
             "file_id": str(asset_record.asset_id),
         }
     )
-
-
 
 @data_router.post("/process/{project_id}")
 async def process_endpoint(request: Request, project_id: int, process_request: ProcessRequest):
