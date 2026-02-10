@@ -50,4 +50,15 @@ class AssetModel(BaseDataModel):
             record = result.scalar_one_or_none()
         return record
 
+    async def get_asset_by_hash(self, asset_project_id: int, file_hash: str):
+        """Check if an asset with the same hash exists in the project"""
+        async with self.db_client() as session:
+            stmt = select(Asset).where(
+                Asset.asset_project_id == asset_project_id,
+                Asset.asset_hash == file_hash
+            )
+            result = await session.execute(stmt)
+            record = result.scalar_one_or_none()
+        return record
+
 
