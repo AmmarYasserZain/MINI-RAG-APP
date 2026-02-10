@@ -16,6 +16,7 @@ class Asset(SQLAlchemyBase):
     asset_name = Column(String, nullable=False)
     asset_size = Column(Integer, nullable=False)
     asset_config = Column(JSONB, nullable=True)
+    asset_hash = Column(String(64), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
