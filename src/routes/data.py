@@ -4,6 +4,7 @@ import aiofiles
 from models import ResponseSignal
 from controllers import NLPController
 from .schemes.data import ProcessRequest
+from utils.request_parser import UploadRequestParser
 from fastapi.responses import JSONResponse
 from models.ChunkModel import ChunkModel
 from models.AssetModel import AssetModel
@@ -12,8 +13,7 @@ from models.enums.AssetTypeEnum import AssetTypeEnum
 from models.db_schemes import Project, DataChunk, Asset
 from helpers.config import Settings, get_settings
 from controllers import DataController, ProjectController, ProcessController
-from fastapi import FastAPI, APIRouter, UploadFile, status, Request, Depends
-
+from fastapi import File, APIRouter, UploadFile, status, Request, Depends, Body
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -24,80 +24,149 @@ data_router = APIRouter(
 
 
 @data_router.post("/upload/{project_id}")
-async def upload_data(request: Request, project_id: int, file: UploadFile,
-                      app_settings: Settings=Depends(get_settings)):
-    
-    project_model = await ProjectModel.create_instance(
-        db_client = request.app.db_client
-    )
+async def upload_data(request: Request, project_id: int, 
+                    file: UploadFile | None = File(None),
+                    app_settings: Settings = Depends(get_settings)):
+    source, url = await UploadRequestParser.parse(request)
+
+    if source is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"signal": ResponseSignal.INVALID_SOURCE_TYPE.value}
+        )
+    project_model = await ProjectModel.create_instance(db_client=request.app.db_client)
     project = await project_model.get_project_or_create_one(project_id=project_id)
-    
-    # Validate the file properties
+
+    asset_model = await AssetModel.create_instance(db_client=request.app.db_client)
     data_controller = DataController()
-    is_valid, result_signal = data_controller.validate_uploaded_file(file=file)
-    if not is_valid:
+
+    # For files
+    if source == "file":
+
+        if not file:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.FILE_REQUIRED.value}
+            )
+
+        is_valid, result_signal = data_controller.validate_uploaded_file(file=file)
+        if not is_valid:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": result_signal}
+            )
+
+        file_hash = await data_controller.calculate_file_hash(
+            file,
+            app_settings.FILE_DEFAULT_CHUNK_SIZE
+        )
+
+        existing_asset = await asset_model.get_asset_by_hash(
+            asset_project_id=project_id,
+            file_hash=file_hash
+        )
+
+        if existing_asset:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "signal": ResponseSignal.FILE_ALREADY_EXISTS.value,
+                    "file_id": str(existing_asset.asset_id),
+                    "message": "This file has already been uploaded to this project"
+                }
+            )
+
+        file_path, file_id = data_controller.generate_unique_filepath(
+            file.filename,
+            project_id=project_id
+        )
+
+        try:
+            async with aiofiles.open(file_path, "wb") as f:
+                while chunk := await file.read(app_settings.FILE_DEFAULT_CHUNK_SIZE):
+                    await f.write(chunk)
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.FILE_UPLOAD_FAILED.value}
+            )
+
+        asset_size = os.path.getsize(file_path)
+        language = None
+
+    # for Url Wekipedia
+    elif source == "url":
+
+        if not url:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.INVALID_URL.value}
+            )
+
+        try:
+            text, title = await data_controller.extract_wekepedia_text(url)
+            language = data_controller.get_wikipedia_language(url)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.WIKIPEDIA_PAGE_NOT_FOUND.value}
+            )
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.URL_EXTRACTION_FAILED.value}
+            )
+
+        file_hash = data_controller.calculate_text_hash(text)
+
+        existing_asset = await asset_model.get_asset_by_hash(
+            asset_project_id=project_id,
+            file_hash=file_hash
+        )
+
+        if existing_asset:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "signal": ResponseSignal.FILE_ALREADY_EXISTS.value,
+                    "file_id": str(existing_asset.asset_id),
+                }
+            )
+
+        clean_name = data_controller.get_clean_file_name(title) + ".txt"
+
+        file_path, file_id = data_controller.generate_unique_filepath(
+            clean_name,
+            project_id=project_id
+        )
+
+        try:
+            await data_controller.save_text_file(text, file_path)
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"signal": ResponseSignal.TEXT_SAVE_FAILED.value}
+            )
+
+        asset_size = len(text.encode("utf-8"))
+
+    else:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "signal": result_signal
-            }
+            content={"signal": ResponseSignal.INVALID_SOURCE_TYPE.value}
         )
-    
-    # Calculate file hash BEFORE saving to check for duplicates
-    file_hash = await data_controller.calculate_file_hash(
-        file, 
-        app_settings.FILE_DEFAULT_CHUNK_SIZE
-    )
-    
-    # Check if file already exists in this project
-    asset_model = await AssetModel.create_instance(
-        db_client=request.app.db_client
-    )
-    existing_asset = await asset_model.get_asset_by_hash(
-        asset_project_id=project_id, 
-        file_hash=file_hash
-    )
-    
-    if existing_asset:
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "signal": ResponseSignal.FILE_ALREADY_EXISTS.value,
-                "file_id": str(existing_asset.asset_id),
-                "message": "This file has already been uploaded to this project"
-            }
-        )
-    
-    # File is new, proceed with upload
-    project_dir_path = ProjectController().get_project_path(project_id=project_id)
-    file_path, file_id = data_controller.generate_unique_filepath(
-        file.filename, 
-        project_id=project_id
-    )
-    
-    try:
-        async with aiofiles.open(file_path, "wb") as f:
-            while chunk := await file.read(app_settings.FILE_DEFAULT_CHUNK_SIZE):
-                await f.write(chunk)
-    except Exception as e:
-        logger.error(f"Error while uploading file: {e}")
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "signal": ResponseSignal.FILE_UPLOAD_FAILED.value
-            }
-        )
-    
-    # Store the asset in the database with hash
+
+    # Save to DB
     asset_resource = Asset(
         asset_project_id=project.project_id,
         asset_type=AssetTypeEnum.FILE.value,
         asset_name=file_id,
-        asset_size=os.path.getsize(file_path),
-        asset_hash=file_hash  
+        asset_size=asset_size,
+        asset_hash=file_hash,
     )
+
     asset_record = await asset_model.create_asset(asset=asset_resource)
-    
+
     return JSONResponse(
         content={
             "signal": ResponseSignal.FILE_UPLOAD_SUCCESS.value,
