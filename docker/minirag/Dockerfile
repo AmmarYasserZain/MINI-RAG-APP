@@ -27,7 +27,9 @@ RUN mkdir -p /app/models/db_schemes/minirag/
 COPY docker/minirag/alembic.ini /app/models/db_schemes/minirag/alembic.ini
 
 COPY docker/minirag/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh && sed -i 's/\r$//' /entrypoint.sh
+
 
 ENTRYPOINT ["/entrypoint.sh"]
 
